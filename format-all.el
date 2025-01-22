@@ -182,7 +182,7 @@
     ("PHP" prettier)
     ("Protocol Buffer" clang-format)
     ("PureScript" purty)
-    ("Python" black)
+    ("Python" black blackd)
     ("R" styler)
     ("Reason" bsrefmt)
     ("ReScript" rescript)
@@ -703,6 +703,82 @@ Consult the existing formatters for examples of BODY."
             executable "-q"
             (when (format-all--buffer-extension-p "pyi") "--pyi")
             "-")))
+
+(defun format-all--get-unused-port ()
+  (let (process contact)
+    (setq process
+          (make-network-process
+           :name "get-any-port"
+           :server t
+           :host 'local
+           :service t
+           :noquery t))
+    (unwind-protect
+        (progn
+          (setq contact (process-contact process t t))
+          (plist-get contact :service))
+      (delete-process process))))
+
+(defvar format-all--blackd-port nil)
+(defvar format-all--blackd-process nil)
+
+(defun format-all--check-port-ready ()
+  (condition-case nil
+      (progn
+        (delete-process
+         (open-network-stream "server-check" nil "localhost" format-all--blackd-port :type 'plain))
+        t)
+    (file-error nil)))
+
+(defun format-all--blackd-ensure-process (executable)
+  (when (and format-all--blackd-process
+             (not (process-live-p format-all--blackd-process)))
+    (delete-process format-all--blackd-process)
+    (setq format-all--blackd-process nil))
+  (unless format-all--blackd-process
+    (setq format-all--blackd-port (number-to-string (format-all--get-unused-port)))
+    (setq format-all--blackd-process
+          (make-process
+           :name "blackd"
+           :connection-type 'pipe
+           :buffer " *blackd*"
+           :coding 'no-conversion
+           :command (list executable "--bind-port" format-all--blackd-port)
+           :noquery t))
+    (while (not (format-all--check-port-ready))
+      (sleep-for 0.1))))
+
+(eval-when-compile
+  (require 'url-http))
+
+(define-format-all-formatter blackd
+  (:executable "blackd")
+  (:install "pip install black[d]")
+  (:languages "Python")
+  (:features)
+  (:format
+   (let ((is-pyi (format-all--buffer-extension-p "pyi")))
+     (format-all--buffer-thunk
+      (lambda (input)
+        (format-all--blackd-ensure-process executable)
+        (let* ((url-request-method "POST")
+               (url-request-data input)
+               (url (concat "http://localhost:" format-all--blackd-port))
+               (url-request-extra-headers (when is-pyi '(("X-Python-Variant" . "pyi"))))
+               (res (url-retrieve-synchronously url 'silent 'inhibit-cookies))
+               (status (with-current-buffer res (bound-and-true-p url-http-response-status))))
+          (pcase status
+            (204 (progn
+                   (insert input)
+                   (list nil nil)))
+            (200 (progn
+                   (url-insert-buffer-contents res url)
+                   (list nil nil)))
+            (_ (progn
+                 (list 'error
+                       (with-temp-buffer
+                         (url-insert-buffer-contents res url)
+                         (buffer-string))))))))))))
 
 (define-format-all-formatter brittany
   (:executable "brittany")
