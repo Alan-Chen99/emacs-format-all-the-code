@@ -746,6 +746,10 @@ Consult the existing formatters for examples of BODY."
            :command (list executable "--bind-port" format-all--blackd-port)
            :noquery t))
     (while (not (format-all--check-port-ready))
+      (when (not (process-live-p format-all--blackd-process))
+        (delete-process format-all--blackd-process)
+        (setq format-all--blackd-process nil)
+        (error "blackd crashed. see buffer ` *blackd*` for more details."))
       (sleep-for 0.1))))
 
 (eval-when-compile
